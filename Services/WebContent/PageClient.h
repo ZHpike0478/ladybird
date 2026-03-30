@@ -17,6 +17,7 @@
 #include <LibWeb/Painting/BackingStoreManager.h>
 #include <LibWeb/PixelUnits.h>
 #include <LibWeb/StorageAPI/StorageEndpoint.h>
+#include <LibWeb/HTML/VisibilityState.h>
 #include <LibWebView/Forward.h>
 #include <LibWebView/StorageSetResult.h>
 #include <WebContent/Forward.h>
@@ -61,6 +62,7 @@ public:
     }
     void set_zoom_level(double zoom_level);
     void set_maximum_frames_per_second(u64 maximum_frames_per_second);
+    void set_system_visibility_state(Web::HTML::VisibilityState);
     void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
     void set_preferred_contrast(Web::CSS::PreferredContrast);
     void set_preferred_motion(Web::CSS::PreferredMotion);
@@ -199,6 +201,8 @@ private:
     virtual void page_did_receive_network_response_body(u64 request_id, ReadonlyBytes) override;
     virtual void page_did_finish_network_request(u64 request_id, u64 body_size, Requests::RequestTimingInfo const&, Optional<Requests::NetworkError> const&) override;
 
+    int paint_refresh_interval_for_current_state() const;
+    void update_paint_refresh_timer();
     void setup_palette();
     ConnectionFromClient& client() const;
 

@@ -45,6 +45,7 @@ namespace WebContent {
 
 static PageClient::UseSkiaPainter s_use_skia_painter = PageClient::UseSkiaPainter::GPUBackendIfAvailable;
 static bool s_is_headless { false };
+static constexpr double s_background_frames_per_second = 5.0;
 
 GC_DEFINE_ALLOCATOR(PageClient);
 
@@ -75,16 +76,10 @@ PageClient::PageClient(PageHost& owner, u64 id)
 {
     setup_palette();
 
-    // FIXME: This removes the decimal part, so the refresh interval will actually be higher than the maximum FPS.
-    //        For example, 60 FPS = 1000ms / 60 = 16.6666...ms, but it will become 16ms, making the interval equivalent
-    //        to 62.5 FPS.
-    int refresh_interval = static_cast<int>(1000.0 / m_maximum_frames_per_second);
-
-    m_paint_refresh_timer = Core::Timer::create_repeating(refresh_interval, [] {
+    m_paint_refresh_timer = Core::Timer::create_repeating(1000, [] {
         Web::HTML::main_thread_event_loop().queue_task_to_update_the_rendering();
     });
-
-    m_paint_refresh_timer->start();
+    update_paint_refresh_timer();
 }
 
 PageClient::~PageClient() = default;
@@ -228,14 +223,34 @@ void PageClient::set_zoom_level(double zoom_level)
 void PageClient::set_maximum_frames_per_second(u64 maximum_frames_per_second)
 {
     m_maximum_frames_per_second = maximum_frames_per_second;
+    update_paint_refresh_timer();
+}
 
-    // FIXME: This removes the decimal part, so the refresh interval will actually be higher than the maximum FPS.
-    //        For example, 60 FPS = 1000ms / 60 = 16.6666...ms, but it will become 16ms, making the interval equivalent
-    //        to 62.5 FPS.
-    int refresh_interval = static_cast<int>(1000.0 / m_maximum_frames_per_second);
+void PageClient::set_system_visibility_state(Web::HTML::VisibilityState visibility_state)
+{
+    page().top_level_traversable()->set_system_visibility_state(visibility_state);
+    update_paint_refresh_timer();
+}
 
+int PageClient::paint_refresh_interval_for_current_state() const
+{
+    auto frames_per_second = m_maximum_frames_per_second;
+    if (page().top_level_traversable()->system_visibility_state() == Web::HTML::VisibilityState::Hidden)
+        frames_per_second = min(frames_per_second, s_background_frames_per_second);
+
+    return max(1, round_to<int>(1000.0 / frames_per_second));
+}
+
+void PageClient::update_paint_refresh_timer()
+{
     VERIFY(m_paint_refresh_timer);
+
+    auto refresh_interval = paint_refresh_interval_for_current_state();
     m_paint_refresh_timer->set_interval(refresh_interval);
+    if (m_paint_refresh_timer->is_active())
+        m_paint_refresh_timer->restart(refresh_interval);
+    else
+        m_paint_refresh_timer->start(refresh_interval);
 }
 
 void PageClient::page_did_request_cursor_change(Gfx::Cursor const& cursor)

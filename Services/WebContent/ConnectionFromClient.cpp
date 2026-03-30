@@ -1251,7 +1251,7 @@ void ConnectionFromClient::request_file(u64 page_id, Web::FileRequest file_reque
 void ConnectionFromClient::set_system_visibility_state(u64 page_id, Web::HTML::VisibilityState visibility_state)
 {
     if (auto page = this->page(page_id); page.has_value())
-        page->page().top_level_traversable()->set_system_visibility_state(visibility_state);
+        page->set_system_visibility_state(visibility_state);
 }
 
 void ConnectionFromClient::reset_zoom(u64 page_id)

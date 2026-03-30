@@ -391,6 +391,12 @@ void Application::launch_spare_web_content_process()
     if (browser_options().webdriver_endpoint.has_value())
         return;
 
+    // Avoid keeping a spare renderer warm on low-memory systems where the resident set cost
+    // is more noticeable than the tab-open latency win.
+    constexpr u64 minimum_memory_for_spare_process = 4ull * MiB * KiB;
+    if (Core::System::physical_memory_bytes() <= minimum_memory_for_spare_process)
+        return;
+
     // Disable spare processes when debugging WebContent. Otherwise, it breaks running `gdb attach -p $(pidof WebContent)`.
     if (browser_options().debug_helper_process == ProcessType::WebContent)
         return;

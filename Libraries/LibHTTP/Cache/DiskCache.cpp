@@ -112,13 +112,32 @@ Variant<Optional<CacheEntryReader&>, DiskCache::CacheHasOpenEntry> DiskCache::op
     auto serialized_url = serialize_url_for_cache_storage(url);
     auto cache_key = create_cache_key(serialized_url, method, m_partitioned_cache_key);
 
-    if (check_if_cache_has_open_entry(request, cache_key, url, open_mode == OpenMode::Read ? CheckReaderEntries::No : CheckReaderEntries::Yes))
-        return CacheHasOpenEntry {};
-
     auto index_entry = m_index.find_entry(cache_key, request_headers);
     if (!index_entry.has_value()) {
         dbgln_if(HTTP_DISK_CACHE_DEBUG, "\033[36m[disk]\033[0m \033[35;1mNo cache entry for\033[0m {}", url);
         return Optional<CacheEntryReader&> {};
+    }
+
+    auto open_entries = m_open_cache_entries.get(cache_key);
+    if (open_entries.has_value()) {
+        for (auto const& [open_entry, open_request] : *open_entries) {
+            if (is<CacheEntryWriter>(*open_entry)) {
+                dbgln_if(HTTP_DISK_CACHE_DEBUG, "\033[36m[disk]\033[0m \033[36;1mDeferring cache entry for\033[0m {} (waiting for existing writer)", url);
+                m_requests_waiting_completion.ensure(cache_key).append(request);
+                return CacheHasOpenEntry {};
+            }
+
+            if (open_entry->vary_key() != index_entry->vary_key)
+                continue;
+
+            // We allow concurrent readers unless another reader is open for revalidation. That reader will issue the network
+            // request, which may then result in the cache entry being updated or deleted.
+            if (open_mode != OpenMode::Read || (open_request && open_request->is_revalidation_request())) {
+                dbgln_if(HTTP_DISK_CACHE_DEBUG, "\033[36m[disk]\033[0m \033[36;1mDeferring cache entry for\033[0m {} (waiting for existing reader)", url);
+                m_requests_waiting_completion.ensure(cache_key).append(request);
+                return CacheHasOpenEntry {};
+            }
+        }
     }
 
     auto cache_entry = CacheEntryReader::create(*this, m_index, cache_key, index_entry->vary_key, index_entry->response_headers, index_entry->data_size);
@@ -269,19 +288,34 @@ void DiskCache::cache_entry_closed(Badge<CacheEntry>, CacheEntry const& cache_en
 
     m_open_cache_entries.remove(cache_key);
 
-    // FIXME: This creates a bit of a first-past-the-post situation if a resumed request causes other pending requests
-    //        to become delayed again. We may want to come up with some method to control the order of resumed requests.
     if (auto pending_requests = m_requests_waiting_completion.take(cache_key); pending_requests.has_value()) {
         // We defer resuming requests to ensure we are outside of any internal curl callbacks. For example, when curl
         // invokes the CURLOPT_WRITEFUNCTION callback, we will flush pending HTTP headers to the disk cache. If that
         // does not succeed, we delete the cache entry, and end up here. We must queue the new request outside of that
         // callback, otherwise curl will return CURLM_RECURSIVE_API_CALL error codes.
-        Core::deferred_invoke([pending_requests = pending_requests.release_value()]() {
-            for (auto const& request : pending_requests) {
-                if (request)
-                    request->notify_request_unblocked({});
-            }
-        });
+        auto waiting_requests = pending_requests.release_value();
+        WeakPtr<CacheRequest> next_request;
+        Vector<WeakPtr<CacheRequest>, 1> remaining_requests;
+        remaining_requests.ensure_capacity(waiting_requests.size());
+
+        for (auto const& request : waiting_requests) {
+            if (!request)
+                continue;
+            if (!next_request)
+                next_request = request;
+            else
+                remaining_requests.append(request);
+        }
+
+        if (!remaining_requests.is_empty())
+            m_requests_waiting_completion.set(cache_key, move(remaining_requests));
+
+        if (next_request) {
+            Core::deferred_invoke([next_request] {
+                if (next_request)
+                    next_request->notify_request_unblocked({});
+            });
+        }
     }
 }
 

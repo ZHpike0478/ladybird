@@ -8,13 +8,55 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/ScopeGuard.h>
 #include <AK/String.h>
 #include <AK/Utf16View.h>
 #include <AK/Vector.h>
 #include <AK/Windows.h>
+#include <LibCore/File.h>
 #include <LibCore/Process.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 namespace Core {
+
+static constexpr int windows_stdin_fd = 0;
+static constexpr int windows_stdout_fd = 1;
+static constexpr int windows_stderr_fd = 2;
+
+static ByteString quote_windows_argument(ByteString const& argument)
+{
+    StringBuilder builder;
+    builder.append('"');
+
+    size_t backslash_count = 0;
+    for (auto ch : argument) {
+        if (ch == '\\') {
+            ++backslash_count;
+            continue;
+        }
+
+        if (ch == '"') {
+            for (size_t i = 0; i < backslash_count * 2 + 1; ++i)
+                builder.append('\\');
+            builder.append('"');
+            backslash_count = 0;
+            continue;
+        }
+
+        for (size_t i = 0; i < backslash_count; ++i)
+            builder.append('\\');
+        backslash_count = 0;
+        builder.append(ch);
+    }
+
+    for (size_t i = 0; i < backslash_count * 2; ++i)
+        builder.append('\\');
+    builder.append('"');
+
+    return builder.to_byte_string();
+}
 
 Process::Process(Process&& other)
     : m_handle(exchange(other.m_handle, nullptr))
@@ -40,34 +82,120 @@ Process Process::current()
 
 ErrorOr<Process> Process::spawn(ProcessSpawnOptions const& options)
 {
-    // file actions are not supported
-    VERIFY(options.file_actions.is_empty());
-
     StringBuilder builder;
-    if (!options.search_for_executable_in_path && !options.executable.find_any_of("\\/:"sv).has_value())
-        builder.appendff("\"./{}\" ", options.executable);
-    else
-        builder.appendff("\"{}\" ", options.executable);
+    builder.append(quote_windows_argument(options.executable));
 
-    for (auto arg : options.arguments)
-        builder.appendff("\"{}\" ", arg);
+    for (auto const& arg : options.arguments) {
+        builder.append(' ');
+        builder.append(quote_windows_argument(arg));
+    }
 
     builder.append('\0');
     ByteBuffer command_line = TRY(builder.to_byte_buffer());
 
-    STARTUPINFO startup_info = {};
+    STARTUPINFOEXA startup_info = {};
+    startup_info.StartupInfo.cb = sizeof(startup_info);
     PROCESS_INFORMATION process_info = {};
 
-    BOOL result = CreateProcess(
-        NULL,
-        (char*)command_line.data(),
-        NULL, // process security attributes
-        NULL, // primary thread security attributes
-        TRUE, // handles are inherited
-        0,    // creation flags
-        NULL, // use parent's environment
-        NULL, // working directory
-        &startup_info,
+    Vector<HANDLE> inherited_handles;
+    auto cleanup_inherited_handles = ScopeGuard([&] {
+        for (auto handle : inherited_handles)
+            CloseHandle(handle);
+    });
+
+    auto duplicate_inheritable_handle = [&](HANDLE handle) -> ErrorOr<HANDLE> {
+        HANDLE duplicated_handle = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &duplicated_handle, 0, TRUE, DUPLICATE_SAME_ACCESS))
+            return Error::from_windows_error();
+        inherited_handles.append(duplicated_handle);
+        return duplicated_handle;
+    };
+
+    auto set_startup_std_handle = [&](DWORD std_handle_id, int fd) -> ErrorOr<void> {
+        auto duplicated_handle = TRY(duplicate_inheritable_handle(to_handle(fd)));
+        startup_info.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        switch (std_handle_id) {
+        case STD_INPUT_HANDLE:
+            startup_info.StartupInfo.hStdInput = duplicated_handle;
+            break;
+        case STD_OUTPUT_HANDLE:
+            startup_info.StartupInfo.hStdOutput = duplicated_handle;
+            break;
+        case STD_ERROR_HANDLE:
+            startup_info.StartupInfo.hStdError = duplicated_handle;
+            break;
+        default:
+            VERIFY_NOT_REACHED();
+        }
+        return {};
+    };
+
+    for (auto const& action : options.file_actions) {
+        auto result = action.visit(
+            [&](FileAction::OpenFile const& open_file) -> ErrorOr<void> {
+                VERIFY(open_file.fd == windows_stdin_fd || open_file.fd == windows_stdout_fd || open_file.fd == windows_stderr_fd);
+
+                auto file = TRY(Core::File::open(open_file.path, open_file.mode));
+                auto std_handle_id = open_file.fd == windows_stdin_fd ? STD_INPUT_HANDLE
+                    : open_file.fd == windows_stdout_fd               ? STD_OUTPUT_HANDLE
+                                                                      : STD_ERROR_HANDLE;
+                return set_startup_std_handle(std_handle_id, file->fd());
+            },
+            [&](FileAction::CloseFile const& close_file) -> ErrorOr<void> {
+                if (close_file.fd == windows_stdin_fd || close_file.fd == windows_stdout_fd || close_file.fd == windows_stderr_fd) {
+                    startup_info.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+                    if (close_file.fd == windows_stdin_fd)
+                        startup_info.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
+                    else if (close_file.fd == windows_stdout_fd)
+                        startup_info.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+                    else
+                        startup_info.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+                }
+                return {};
+            },
+            [&](FileAction::DupFd const& dup_fd) -> ErrorOr<void> {
+                VERIFY(dup_fd.fd == windows_stdin_fd || dup_fd.fd == windows_stdout_fd || dup_fd.fd == windows_stderr_fd);
+
+                auto std_handle_id = dup_fd.fd == windows_stdin_fd ? STD_INPUT_HANDLE
+                    : dup_fd.fd == windows_stdout_fd              ? STD_OUTPUT_HANDLE
+                                                                   : STD_ERROR_HANDLE;
+                return set_startup_std_handle(std_handle_id, dup_fd.write_fd);
+            });
+        TRY(result);
+    }
+
+    if (auto socket_takeover = getenv("SOCKET_TAKEOVER")) {
+        auto separator = strchr(socket_takeover, ':');
+        if (separator) {
+            auto inherited_fd = atoi(separator + 1);
+            auto duplicated_handle = TRY(duplicate_inheritable_handle(to_handle(inherited_fd)));
+            (void)duplicated_handle;
+        }
+    }
+
+    SIZE_T attribute_list_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_list_size);
+    ByteBuffer attribute_list_buffer = TRY(ByteBuffer::create_uninitialized(attribute_list_size));
+    startup_info.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attribute_list_buffer.data());
+    if (!InitializeProcThreadAttributeList(startup_info.lpAttributeList, 1, 0, &attribute_list_size))
+        return Error::from_windows_error();
+    auto cleanup_attribute_list = ScopeGuard([&] {
+        DeleteProcThreadAttributeList(startup_info.lpAttributeList);
+    });
+
+    if (!UpdateProcThreadAttribute(startup_info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited_handles.data(), inherited_handles.size() * sizeof(HANDLE), nullptr, nullptr))
+        return Error::from_windows_error();
+
+    BOOL result = CreateProcessA(
+        nullptr,
+        reinterpret_cast<char*>(command_line.data()),
+        nullptr, // process security attributes
+        nullptr, // primary thread security attributes
+        TRUE,    // handles are inherited according to the explicit handle list above
+        EXTENDED_STARTUPINFO_PRESENT,
+        nullptr, // use parent's environment
+        nullptr, // working directory
+        &startup_info.StartupInfo,
         &process_info);
 
     if (!result)
