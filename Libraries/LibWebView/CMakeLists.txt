@@ -23,6 +23,7 @@ set(SOURCES
     SiteIsolation.cpp
     SourceHighlighter.cpp
     StorageJar.cpp
+    StorageSnapshot.cpp
     URL.cpp
     UserAgent.cpp
     Utilities.cpp

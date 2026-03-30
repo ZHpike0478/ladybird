@@ -583,14 +583,32 @@ Messages::WebContentClient::DidRequestStorageItemResponse WebContentClient::did_
     return Application::storage_jar().get_item(storage_endpoint, storage_key, bottle_key);
 }
 
-Messages::WebContentClient::DidSetStorageItemResponse WebContentClient::did_set_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key, String value)
+Messages::WebContentClient::DidRequestStorageSnapshotResponse WebContentClient::did_request_storage_snapshot(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key)
 {
-    return Application::storage_jar().set_item(storage_endpoint, storage_key, bottle_key, value);
+    return Application::storage_jar().get_all_items(storage_endpoint, storage_key);
 }
 
-void WebContentClient::did_remove_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key)
+Messages::WebContentClient::DidSetStorageItemResponse WebContentClient::did_set_storage_item(u64 page_id, Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key, String value)
+{
+    auto result = Application::storage_jar().set_item(storage_endpoint, storage_key, bottle_key, value);
+    ViewImplementation::for_each_view([&](ViewImplementation& view) {
+        if (view.page_id() == page_id)
+            return IterationDecision::Continue;
+        view.notify_storage_changed(storage_endpoint, storage_key);
+        return IterationDecision::Continue;
+    });
+    return result;
+}
+
+void WebContentClient::did_remove_storage_item(u64 page_id, Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key)
 {
     Application::storage_jar().remove_item(storage_endpoint, storage_key, bottle_key);
+    ViewImplementation::for_each_view([&](ViewImplementation& view) {
+        if (view.page_id() == page_id)
+            return IterationDecision::Continue;
+        view.notify_storage_changed(storage_endpoint, storage_key);
+        return IterationDecision::Continue;
+    });
 }
 
 Messages::WebContentClient::DidRequestStorageKeysResponse WebContentClient::did_request_storage_keys(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key)
@@ -598,9 +616,15 @@ Messages::WebContentClient::DidRequestStorageKeysResponse WebContentClient::did_
     return Application::storage_jar().get_all_keys(storage_endpoint, storage_key);
 }
 
-void WebContentClient::did_clear_storage(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key)
+void WebContentClient::did_clear_storage(u64 page_id, Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key)
 {
     Application::storage_jar().clear_storage_key(storage_endpoint, storage_key);
+    ViewImplementation::for_each_view([&](ViewImplementation& view) {
+        if (view.page_id() == page_id)
+            return IterationDecision::Continue;
+        view.notify_storage_changed(storage_endpoint, storage_key);
+        return IterationDecision::Continue;
+    });
 }
 
 Messages::WebContentClient::DidRequestNewWebViewResponse WebContentClient::did_request_new_web_view(u64 page_id, Web::HTML::ActivateTab activate_tab, Web::HTML::WebViewHints hints, Optional<u64> page_index)

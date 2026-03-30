@@ -1388,6 +1388,21 @@ void ConnectionFromClient::cookies_changed(u64 page_id, Vector<HTTP::Cookie::Coo
     }
 }
 
+void ConnectionFromClient::storage_changed(u64 page_id, Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key)
+{
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto window = page->page().top_level_traversable()->active_window();
+        if (!window)
+            return;
+
+        auto document_storage = window->associated_document().local_storage_holder();
+        if (!document_storage)
+            return;
+
+        document_storage->invalidate_for_external_storage_change(storage_endpoint, storage_key);
+    }
+}
+
 // https://html.spec.whatwg.org/multipage/speculative-loading.html#nav-traversal-ui:close-a-top-level-traversable
 void ConnectionFromClient::request_close(u64 page_id)
 {

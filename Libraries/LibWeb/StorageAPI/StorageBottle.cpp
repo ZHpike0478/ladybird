@@ -107,32 +107,64 @@ void LocalStorageBottle::visit_edges(GC::Cell::Visitor& visitor)
 
 size_t LocalStorageBottle::size() const
 {
-    return m_page->client().page_did_request_storage_keys(Web::StorageAPI::StorageEndpointType::LocalStorage, m_storage_key.to_string()).size();
+    ensure_snapshot_loaded();
+    return m_snapshot.size();
 }
 
 Vector<String> LocalStorageBottle::keys() const
 {
-    return m_page->client().page_did_request_storage_keys(Web::StorageAPI::StorageEndpointType::LocalStorage, m_storage_key.to_string());
+    ensure_snapshot_loaded();
+    return m_snapshot.keys();
 }
 
 Optional<String> LocalStorageBottle::get(String const& key) const
 {
-    return m_page->client().page_did_request_storage_item(Web::StorageAPI::StorageEndpointType::LocalStorage, m_storage_key.to_string(), key);
+    ensure_snapshot_loaded();
+    return m_snapshot.get(key);
 }
 
 WebView::StorageSetResult LocalStorageBottle::set(String const& key, String const& value)
 {
-    return m_page->client().page_did_set_storage_item(Web::StorageAPI::StorageEndpointType::LocalStorage, m_storage_key.to_string(), key, value);
+    auto result = m_page->client().page_did_set_storage_item(Web::StorageAPI::StorageEndpointType::LocalStorage, m_storage_key.to_string(), key, value);
+    if (!result.has<WebView::StorageOperationError>() && m_has_snapshot)
+        m_snapshot.set(key, value);
+    return result;
 }
 
 void LocalStorageBottle::clear()
 {
     m_page->client().page_did_clear_storage(Web::StorageAPI::StorageEndpointType::LocalStorage, m_storage_key.to_string());
+    if (m_has_snapshot)
+        m_snapshot.clear();
 }
 
 void LocalStorageBottle::remove(String const& key)
 {
     m_page->client().page_did_remove_storage_item(Web::StorageAPI::StorageEndpointType::LocalStorage, m_storage_key.to_string(), key);
+    if (m_has_snapshot)
+        m_snapshot.remove(key);
+}
+
+void LocalStorageBottle::ensure_snapshot_loaded() const
+{
+    if (m_has_snapshot)
+        return;
+
+    m_snapshot.clear();
+    for (auto& entry : m_page->client().page_did_request_storage_snapshot(Web::StorageAPI::StorageEndpointType::LocalStorage, m_storage_key.to_string()))
+        m_snapshot.set(move(entry.key), move(entry.value));
+    m_has_snapshot = true;
+}
+
+void LocalStorageBottle::invalidate_snapshot()
+{
+    m_has_snapshot = false;
+    m_snapshot.clear();
+}
+
+bool LocalStorageBottle::matches_storage_key(String const& storage_key) const
+{
+    return m_storage_key.to_string() == storage_key;
 }
 
 size_t SessionStorageBottle::size() const

@@ -16,6 +16,7 @@
 #include <LibImageDecoderClient/Client.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/Loader/UserAgent.h>
+#include <LibWeb/StorageAPI/StorageEndpoint.h>
 #include <LibWebView/Application.h>
 #include <LibWebView/CookieJar.h>
 #include <LibWebView/HeadlessWebView.h>
@@ -301,11 +302,9 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     if (webdriver_endpoint.has_value())
         m_browser_options.webdriver_endpoint = *webdriver_endpoint;
 
-    auto http_disk_cache_mode = HTTPDiskCacheMode::Enabled;
+    auto http_disk_cache_mode = HTTPDiskCacheMode::Partitioned;
     if (disable_http_disk_cache)
         http_disk_cache_mode = HTTPDiskCacheMode::Disabled;
-    else if (force_new_process)
-        http_disk_cache_mode = HTTPDiskCacheMode::Partitioned;
 
     m_request_server_options = {
         .certificates = move(certificates),
@@ -797,6 +796,10 @@ void Application::clear_browsing_data(ClearBrowsingDataOptions const& options)
     if (options.delete_site_data == ClearBrowsingDataOptions::Delete::Yes) {
         m_cookie_jar->expire_cookies_accessed_since(options.since);
         m_storage_jar->remove_items_accessed_since(options.since);
+        ViewImplementation::for_each_view([](ViewImplementation& view) {
+            view.notify_storage_changed(Web::StorageAPI::StorageEndpointType::LocalStorage, {});
+            return IterationDecision::Continue;
+        });
     }
 }
 

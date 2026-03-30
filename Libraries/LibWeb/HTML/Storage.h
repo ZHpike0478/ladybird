@@ -38,6 +38,7 @@ public:
     void remove_item(String const& key);
     void clear();
     Type type() const { return m_type; }
+    void invalidate_for_external_storage_change(Web::StorageAPI::StorageEndpointType storage_endpoint, String const& storage_key);
 
     void dump() const;
 

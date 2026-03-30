@@ -24,6 +24,7 @@ namespace RequestServer {
 extern OwnPtr<ResourceSubstitutionMap> g_resource_substitution_map;
 
 static long s_connect_timeout_seconds = 90L;
+static constexpr int CACHE_WAIT_TIMEOUT_MS = 2000;
 
 NonnullOwnPtr<Request> Request::fetch(
     u64 request_id,
@@ -163,8 +164,10 @@ Request::~Request()
 
 void Request::notify_request_unblocked(Badge<HTTP::DiskCache>)
 {
-    // FIXME: We may want a timer to limit how long we are waiting for a request before proceeding with a network
-    //        request that skips the disk cache.
+    if (m_state != State::WaitForCache)
+        return;
+
+    clear_cache_wait_timeout();
     transition_to_state(State::Init);
 }
 
@@ -250,6 +253,8 @@ void Request::process()
 
 void Request::handle_initial_state()
 {
+    clear_cache_wait_timeout();
+
     // Check for resource substitution before anything else.
     if (g_resource_substitution_map) {
         if (g_resource_substitution_map->lookup(m_url).has_value()) {
@@ -258,8 +263,12 @@ void Request::handle_initial_state()
         }
     }
 
-    if (m_cache_mode == HTTP::CacheMode::NoStore) {
+    if (m_should_bypass_disk_cache_for_request || m_cache_mode == HTTP::CacheMode::NoStore) {
         m_cache_status = HTTP::CacheRequest::CacheStatus::NotCached;
+        if (is_cache_only_request()) {
+            transition_to_state(State::FailedCacheOnly);
+            return;
+        }
     } else if (m_disk_cache.has_value()) {
         auto open_mode = m_type == Type::BackgroundRevalidation
             ? HTTP::DiskCache::OpenMode::Revalidate
@@ -287,6 +296,16 @@ void Request::handle_initial_state()
                 [&](HTTP::DiskCache::CacheHasOpenEntry) {
                     // If an existing entry is open for writing, we must wait for it to complete.
                     transition_to_state(State::WaitForCache);
+                    m_cache_wait_timeout_timer = Core::Timer::create_single_shot(CACHE_WAIT_TIMEOUT_MS, [this] {
+                        if (m_state != State::WaitForCache)
+                            return;
+
+                        dbgln("Request::handle_initial_state: Timed out waiting for cache entry, bypassing disk cache for {} {}", m_method, m_url);
+                        m_should_bypass_disk_cache_for_request = true;
+                        m_cache_status = HTTP::CacheRequest::CacheStatus::NotCached;
+                        transition_to_state(State::Init);
+                    });
+                    m_cache_wait_timeout_timer->start();
                 });
 
         if (m_state != State::Init)
@@ -310,6 +329,16 @@ void Request::handle_initial_state()
                     // open for reading is a rare case, but may occur if a cached response expired between the existing
                     // entry's cache validation and the attempted reader validation when this request was created.
                     transition_to_state(State::WaitForCache);
+                    m_cache_wait_timeout_timer = Core::Timer::create_single_shot(CACHE_WAIT_TIMEOUT_MS, [this] {
+                        if (m_state != State::WaitForCache)
+                            return;
+
+                        dbgln("Request::handle_initial_state: Timed out waiting to create cache entry, bypassing disk cache for {} {}", m_method, m_url);
+                        m_should_bypass_disk_cache_for_request = true;
+                        m_cache_status = HTTP::CacheRequest::CacheStatus::NotCached;
+                        transition_to_state(State::Init);
+                    });
+                    m_cache_wait_timeout_timer->start();
                 });
 
         if (m_state != State::Init)
@@ -317,6 +346,15 @@ void Request::handle_initial_state()
     }
 
     transition_to_state(State::DNSLookup);
+}
+
+void Request::clear_cache_wait_timeout()
+{
+    if (!m_cache_wait_timeout_timer)
+        return;
+
+    m_cache_wait_timeout_timer->stop();
+    m_cache_wait_timeout_timer = nullptr;
 }
 
 void Request::handle_read_cache_state()

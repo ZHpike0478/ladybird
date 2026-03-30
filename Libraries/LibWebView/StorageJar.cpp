@@ -61,6 +61,7 @@ ErrorOr<NonnullOwnPtr<StorageJar>> StorageJar::create(Database::Database& databa
     statements.update_last_access_time = TRY(database.prepare_statement("UPDATE WebStorage SET last_access_time = ? WHERE storage_endpoint = ? AND storage_key = ? AND bottle_key = ?;"sv));
     statements.clear = TRY(database.prepare_statement("DELETE FROM WebStorage WHERE storage_endpoint = ? AND storage_key = ?;"sv));
     statements.get_keys = TRY(database.prepare_statement("SELECT bottle_key FROM WebStorage WHERE storage_endpoint = ? AND storage_key = ?;"sv));
+    statements.get_items = TRY(database.prepare_statement("SELECT bottle_key, bottle_value FROM WebStorage WHERE storage_endpoint = ? AND storage_key = ?;"sv));
     statements.calculate_size_excluding_key = TRY(database.prepare_statement("SELECT SUM(OCTET_LENGTH(bottle_key) + OCTET_LENGTH(bottle_value)) FROM WebStorage WHERE storage_endpoint = ? AND storage_key = ? AND bottle_key != ?;"sv));
     statements.estimate_storage_size_accessed_since = TRY(database.prepare_statement("SELECT SUM(OCTET_LENGTH(storage_key)) + SUM(OCTET_LENGTH(bottle_key)) + SUM(OCTET_LENGTH(bottle_value)) FROM WebStorage WHERE last_access_time >= ?;"sv));
 
@@ -149,6 +150,13 @@ Vector<String> StorageJar::get_all_keys(StorageEndpointType storage_endpoint, St
     return m_transient_storage.get_keys(storage_endpoint, storage_key);
 }
 
+Vector<StorageSnapshotEntry> StorageJar::get_all_items(StorageEndpointType storage_endpoint, String const& storage_key)
+{
+    if (m_persisted_storage.has_value())
+        return m_persisted_storage->get_items(storage_endpoint, storage_key);
+    return m_transient_storage.get_items(storage_endpoint, storage_key);
+}
+
 Requests::CacheSizes StorageJar::estimate_storage_size_accessed_since(UnixDateTime since) const
 {
     if (m_persisted_storage.has_value())
@@ -221,6 +229,18 @@ Vector<String> StorageJar::TransientStorage::get_keys(StorageEndpointType storag
     }
 
     return keys;
+}
+
+Vector<StorageSnapshotEntry> StorageJar::TransientStorage::get_items(StorageEndpointType storage_endpoint, String const& storage_key)
+{
+    Vector<StorageSnapshotEntry> entries;
+
+    for (auto const& [key, value] : m_storage_items) {
+        if (key.storage_endpoint == storage_endpoint && key.storage_key == storage_key)
+            entries.append({ key.bottle_key, value.value });
+    }
+
+    return entries;
 }
 
 Requests::CacheSizes StorageJar::TransientStorage::estimate_storage_size_accessed_since(UnixDateTime since) const
@@ -331,6 +351,24 @@ Vector<String> StorageJar::PersistedStorage::get_keys(StorageEndpointType storag
         storage_key);
 
     return keys;
+}
+
+Vector<StorageSnapshotEntry> StorageJar::PersistedStorage::get_items(StorageEndpointType storage_endpoint, String const& storage_key)
+{
+    Vector<StorageSnapshotEntry> entries;
+
+    database.execute_statement(
+        statements.get_items,
+        [&](auto statement_id) {
+            entries.append({
+                database.result_column<String>(statement_id, 0),
+                database.result_column<String>(statement_id, 1),
+            });
+        },
+        to_underlying(storage_endpoint),
+        storage_key);
+
+    return entries;
 }
 
 Requests::CacheSizes StorageJar::PersistedStorage::estimate_storage_size_accessed_since(UnixDateTime since) const

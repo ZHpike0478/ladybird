@@ -49,7 +49,9 @@ ErrorOr<NonnullOwnPtr<CookieJar>> CookieJar::create(Database::Database& database
 
     statements.insert_cookie = TRY(database.prepare_statement("INSERT OR REPLACE INTO Cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"sv));
     statements.expire_cookie = TRY(database.prepare_statement("DELETE FROM Cookies WHERE (expiry_time < ?);"sv));
+    statements.expire_cookies_accessed_since = TRY(database.prepare_statement("DELETE FROM Cookies WHERE last_access_time >= ?;"sv));
     statements.select_all_cookies = TRY(database.prepare_statement("SELECT * FROM Cookies;"sv));
+    statements.estimate_storage_size_accessed_since = TRY(database.prepare_statement("SELECT SUM(OCTET_LENGTH(name)) + SUM(OCTET_LENGTH(domain)) + SUM(OCTET_LENGTH(path)) + SUM(OCTET_LENGTH(value)) FROM Cookies WHERE last_access_time >= ?;"sv));
 
     return adopt_own(*new CookieJar { PersistedStorage { database, statements } });
 }
@@ -63,11 +65,10 @@ CookieJar::CookieJar(Optional<PersistedStorage> persisted_storage)
     : m_persisted_storage(move(persisted_storage))
 {
     if (!m_persisted_storage.has_value())
-        return;
+        m_have_loaded_persisted_cookies = true;
 
-    // FIXME: Make cookie retrieval lazy so we don't need to retrieve all cookies up front.
-    auto cookies = m_persisted_storage->select_all_cookies();
-    m_transient_storage.set_cookies(move(cookies));
+    if (!m_persisted_storage.has_value())
+        return;
 
     m_persisted_storage->synchronization_timer = Core::Timer::create_repeating(
         static_cast<int>(DATABASE_SYNCHRONIZATION_TIMER.to_milliseconds()),
@@ -93,6 +94,7 @@ CookieJar::~CookieJar()
 // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis-22#section-5.8.3
 String CookieJar::get_cookie(URL::URL const& url, HTTP::Cookie::Source source)
 {
+    ensure_cookies_loaded();
     m_transient_storage.purge_expired_cookies();
 
     auto cookie_list = get_matching_cookies(url, source);
@@ -121,6 +123,8 @@ String CookieJar::get_cookie(URL::URL const& url, HTTP::Cookie::Source source)
 // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis-22#section-5.7
 void CookieJar::set_cookie(URL::URL const& url, HTTP::Cookie::ParsedCookie const& parsed_cookie, HTTP::Cookie::Source source)
 {
+    ensure_cookies_loaded();
+
     // 1. A user agent MAY ignore a received cookie in its entirety. See Section 5.3.
 
     // 2. If cookie-name is empty and cookie-value is empty, abort this algorithm and ignore the cookie entirely.
@@ -397,6 +401,8 @@ void CookieJar::set_cookie(URL::URL const& url, HTTP::Cookie::ParsedCookie const
 // This is based on store_cookie() below, however the whole ParsedCookie->Cookie conversion is skipped.
 void CookieJar::update_cookie(HTTP::Cookie::Cookie cookie)
 {
+    ensure_cookies_loaded();
+
     CookieStorageKey key { cookie.name, cookie.domain, cookie.path };
 
     // 23. If the cookie store contains a cookie with the same name, domain, host-only-flag, and path as the
@@ -417,6 +423,8 @@ void CookieJar::update_cookie(HTTP::Cookie::Cookie cookie)
 
 void CookieJar::dump_cookies()
 {
+    ensure_cookies_loaded();
+
     StringBuilder builder;
 
     m_transient_storage.for_each_cookie([&](auto const& cookie) {
@@ -444,6 +452,8 @@ void CookieJar::dump_cookies()
 
 Vector<HTTP::Cookie::Cookie> CookieJar::get_all_cookies()
 {
+    ensure_cookies_loaded();
+
     Vector<HTTP::Cookie::Cookie> cookies;
     cookies.ensure_capacity(m_transient_storage.size());
 
@@ -479,22 +489,34 @@ Optional<HTTP::Cookie::Cookie> CookieJar::get_named_cookie(URL::URL const& url, 
 
 void CookieJar::expire_cookies_with_time_offset(AK::Duration offset)
 {
+    ensure_cookies_loaded();
     m_transient_storage.purge_expired_cookies(offset);
 }
 
 void CookieJar::expire_cookies_accessed_since(UnixDateTime since)
 {
+    if (m_persisted_storage.has_value() && !are_cookies_loaded()) {
+        m_persisted_storage->expire_cookies_accessed_since(since);
+        return;
+    }
+
+    ensure_cookies_loaded();
     m_transient_storage.expire_and_purge_cookies_accessed_since(since);
 }
 
 Requests::CacheSizes CookieJar::estimate_storage_size_accessed_since(UnixDateTime since) const
 {
+    if (m_persisted_storage.has_value() && !are_cookies_loaded())
+        return m_persisted_storage->estimate_storage_size_accessed_since(since);
+
     return m_transient_storage.estimate_storage_size_accessed_since(since);
 }
 
 // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis-22#section-5.8.3
 Vector<HTTP::Cookie::Cookie> CookieJar::get_matching_cookies(URL::URL const& url, HTTP::Cookie::Source source, MatchingCookiesSpecMode mode)
 {
+    ensure_cookies_loaded();
+
     auto now = UnixDateTime::now();
 
     // 1. Let retrieval-host-canonical be the canonicalized host of the retrieval's URI.
@@ -546,6 +568,22 @@ Vector<HTTP::Cookie::Cookie> CookieJar::get_matching_cookies(URL::URL const& url
         m_transient_storage.purge_expired_cookies();
 
     return cookie_list;
+}
+
+void CookieJar::ensure_cookies_loaded()
+{
+    if (m_have_loaded_persisted_cookies)
+        return;
+
+    VERIFY(m_persisted_storage.has_value());
+    auto cookies = m_persisted_storage->select_all_cookies();
+    m_transient_storage.set_cookies(move(cookies));
+    m_have_loaded_persisted_cookies = true;
+}
+
+bool CookieJar::are_cookies_loaded() const
+{
+    return m_have_loaded_persisted_cookies;
 }
 
 void CookieJar::TransientStorage::set_cookies(Cookies cookies)
@@ -669,6 +707,11 @@ void CookieJar::PersistedStorage::insert_cookie(HTTP::Cookie::Cookie const& cook
         cookie.persistent);
 }
 
+void CookieJar::PersistedStorage::expire_cookies_accessed_since(UnixDateTime since)
+{
+    database.execute_statement(statements.expire_cookies_accessed_since, {}, since);
+}
+
 static HTTP::Cookie::Cookie parse_cookie(Database::Database& database, Database::StatementID statement_id)
 {
     int column = 0;
@@ -712,6 +755,23 @@ CookieJar::TransientStorage::Cookies CookieJar::PersistedStorage::select_all_coo
         });
 
     return cookies;
+}
+
+Requests::CacheSizes CookieJar::PersistedStorage::estimate_storage_size_accessed_since(UnixDateTime since) const
+{
+    Requests::CacheSizes sizes;
+
+    database.execute_statement(
+        statements.estimate_storage_size_accessed_since,
+        [&](auto statement_id) { sizes.since_requested_time = database.result_column<u64>(statement_id, 0); },
+        since);
+
+    database.execute_statement(
+        statements.estimate_storage_size_accessed_since,
+        [&](auto statement_id) { sizes.total = database.result_column<u64>(statement_id, 0); },
+        UnixDateTime::earliest());
+
+    return sizes;
 }
 
 }

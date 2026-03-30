@@ -15,6 +15,7 @@
 #include <LibWeb/StorageAPI/StorageEndpoint.h>
 #include <LibWebView/Forward.h>
 #include <LibWebView/StorageSetResult.h>
+#include <LibWebView/StorageSnapshot.h>
 
 namespace WebView {
 
@@ -44,6 +45,7 @@ public:
     void remove_items_accessed_since(UnixDateTime);
     void clear_storage_key(StorageEndpointType storage_endpoint, String const& storage_key);
     Vector<String> get_all_keys(StorageEndpointType storage_endpoint, String const& storage_key);
+    Vector<StorageSnapshotEntry> get_all_items(StorageEndpointType storage_endpoint, String const& storage_key);
     Requests::CacheSizes estimate_storage_size_accessed_since(UnixDateTime since) const;
 
 private:
@@ -55,6 +57,7 @@ private:
         Database::StatementID update_last_access_time { 0 };
         Database::StatementID clear { 0 };
         Database::StatementID get_keys { 0 };
+        Database::StatementID get_items { 0 };
         Database::StatementID calculate_size_excluding_key { 0 };
         Database::StatementID estimate_storage_size_accessed_since { 0 };
     };
@@ -67,6 +70,7 @@ private:
         void delete_items_accessed_since(UnixDateTime);
         void clear(StorageEndpointType storage_endpoint, String const& storage_key);
         Vector<String> get_keys(StorageEndpointType storage_endpoint, String const& storage_key);
+        Vector<StorageSnapshotEntry> get_items(StorageEndpointType storage_endpoint, String const& storage_key);
         Requests::CacheSizes estimate_storage_size_accessed_since(UnixDateTime since) const;
 
     private:
@@ -85,6 +89,7 @@ private:
         void delete_items_accessed_since(UnixDateTime);
         void clear(StorageEndpointType storage_endpoint, String const& storage_key);
         Vector<String> get_keys(StorageEndpointType storage_endpoint, String const& storage_key);
+        Vector<StorageSnapshotEntry> get_items(StorageEndpointType storage_endpoint, String const& storage_key);
         Requests::CacheSizes estimate_storage_size_accessed_since(UnixDateTime since) const;
 
         Database::Database& database;

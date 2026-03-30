@@ -8,6 +8,7 @@
 #pragma once
 
 #include <AK/HashMap.h>
+#include <AK/OrderedHashMap.h>
 #include <AK/String.h>
 #include <LibGC/Ptr.h>
 #include <LibWeb/Forward.h>
@@ -16,6 +17,7 @@
 #include <LibWeb/StorageAPI/StorageKey.h>
 #include <LibWeb/StorageAPI/StorageType.h>
 #include <LibWebView/StorageSetResult.h>
+#include <LibWebView/StorageSnapshot.h>
 
 namespace Web::StorageAPI {
 
@@ -69,6 +71,8 @@ public:
     virtual void visit_edges(GC::Cell::Visitor& visitor) override;
 
 private:
+    void ensure_snapshot_loaded() const;
+
     explicit LocalStorageBottle(GC::Ref<Page> page, StorageKey key, Optional<u64> quota)
         : StorageBottle(quota)
         , m_page(move(page))
@@ -78,6 +82,12 @@ private:
 
     GC::Ref<Page> m_page;
     StorageKey m_storage_key;
+    mutable bool m_has_snapshot { false };
+    mutable OrderedHashMap<String, String> m_snapshot;
+
+public:
+    void invalidate_snapshot();
+    bool matches_storage_key(String const& storage_key) const;
 };
 
 class SessionStorageBottle final : public StorageBottle {

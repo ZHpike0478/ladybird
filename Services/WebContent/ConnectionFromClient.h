@@ -167,6 +167,7 @@ private:
     virtual void set_document_cookie_version_buffer(u64 page_id, Core::AnonymousBuffer document_cookie_version_buffer) override;
     virtual void set_document_cookie_version_index(u64 page_id, i64 document_id, Core::SharedVersionIndex document_index) override;
     virtual void cookies_changed(u64 page_id, Vector<HTTP::Cookie::Cookie>) override;
+    virtual void storage_changed(u64 page_id, Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key) override;
 
     virtual void request_close(u64 page_id) override;
 

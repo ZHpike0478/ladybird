@@ -26,6 +26,7 @@
 #include <LibWebView/ConsoleOutput.h>
 #include <LibWebView/DOMNodeProperties.h>
 #include <LibWeb/StorageAPI/StorageEndpoint.h>
+#include <LibWebView/StorageSnapshot.h>
 #include <LibWebView/StorageSetResult.h>
 #include <LibWebView/Mutation.h>
 #include <LibWebView/PageInfo.h>
@@ -88,10 +89,11 @@ endpoint WebContentClient
     did_expire_cookies_with_time_offset(AK::Duration offset) =|
 
     did_request_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key) => (Optional<String> value)
-    did_set_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key, String value) => (WebView::StorageSetResult result)
-    did_remove_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key) => ()
+    did_request_storage_snapshot(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key) => (Vector<WebView::StorageSnapshotEntry> entries)
+    did_set_storage_item(u64 page_id, Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key, String value) => (WebView::StorageSetResult result)
+    did_remove_storage_item(u64 page_id, Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key) => ()
     did_request_storage_keys(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key) => (Vector<String> keys)
-    did_clear_storage(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key) => ()
+    did_clear_storage(u64 page_id, Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key) => ()
 
     did_update_resource_count(u64 page_id, i32 count_waiting) =|
     did_request_new_web_view(u64 page_id, Web::HTML::ActivateTab activate_tab, Web::HTML::WebViewHints hints, Optional<u64> page_index) => (String handle)

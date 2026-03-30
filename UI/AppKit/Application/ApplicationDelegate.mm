@@ -229,11 +229,13 @@
     [current_window performClose:self];
 }
 
-- (void)clearHistory:(id)sender
+- (void)clearWebsiteData:(id)sender
 {
-    for (TabController* controller in self.managed_tabs) {
-        [controller clearHistory];
-    }
+    WebView::Application::ClearBrowsingDataOptions options;
+    options.since = UnixDateTime::earliest();
+    options.delete_cached_files = WebView::Application::ClearBrowsingDataOptions::Delete::Yes;
+    options.delete_site_data = WebView::Application::ClearBrowsingDataOptions::Delete::Yes;
+    WebView::Application::the().clear_browsing_data(options);
 }
 
 - (NSMenuItem*)createApplicationMenu
@@ -374,8 +376,8 @@
     [submenu addItem:Ladybird::create_application_menu_item(WebView::Application::the().reload_action())];
     [submenu addItem:[NSMenuItem separatorItem]];
 
-    [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Clear History"
-                                                action:@selector(clearHistory:)
+    [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Clear Website Data"
+                                                action:@selector(clearWebsiteData:)
                                          keyEquivalent:@""]];
 
     [menu setSubmenu:submenu];

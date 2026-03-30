@@ -53,7 +53,9 @@ private:
     struct Statements {
         Database::StatementID insert_cookie { 0 };
         Database::StatementID expire_cookie { 0 };
+        Database::StatementID expire_cookies_accessed_since { 0 };
         Database::StatementID select_all_cookies { 0 };
+        Database::StatementID estimate_storage_size_accessed_since { 0 };
     };
 
     class WEBVIEW_API TransientStorage {
@@ -99,7 +101,9 @@ private:
 
     struct WEBVIEW_API PersistedStorage {
         void insert_cookie(HTTP::Cookie::Cookie const& cookie);
+        void expire_cookies_accessed_since(UnixDateTime since);
         TransientStorage::Cookies select_all_cookies();
+        Requests::CacheSizes estimate_storage_size_accessed_since(UnixDateTime since) const;
 
         Database::Database& database;
         Statements statements;
@@ -117,9 +121,12 @@ private:
     };
 
     Vector<HTTP::Cookie::Cookie> get_matching_cookies(URL::URL const& url, HTTP::Cookie::Source source, MatchingCookiesSpecMode mode = MatchingCookiesSpecMode::RFC6265);
+    void ensure_cookies_loaded();
+    bool are_cookies_loaded() const;
 
     Optional<PersistedStorage> m_persisted_storage;
     TransientStorage m_transient_storage;
+    bool m_have_loaded_persisted_cookies { false };
 };
 
 }

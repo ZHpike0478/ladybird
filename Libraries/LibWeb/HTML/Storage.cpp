@@ -158,6 +158,21 @@ void Storage::clear()
     broadcast({}, {}, {});
 }
 
+void Storage::invalidate_for_external_storage_change(Web::StorageAPI::StorageEndpointType storage_endpoint, String const& storage_key)
+{
+    if (m_type != Type::Local || storage_endpoint != Web::StorageAPI::StorageEndpointType::LocalStorage)
+        return;
+
+    auto const* local_storage_bottle = as_if<StorageAPI::LocalStorageBottle>(m_storage_bottle.ptr());
+    if (!local_storage_bottle)
+        return;
+
+    if (!storage_key.is_empty() && !local_storage_bottle->matches_storage_key(storage_key))
+        return;
+
+    const_cast<StorageAPI::LocalStorageBottle*>(local_storage_bottle)->invalidate_snapshot();
+}
+
 // https://html.spec.whatwg.org/multipage/webstorage.html#concept-storage-reorder
 void Storage::reorder()
 {

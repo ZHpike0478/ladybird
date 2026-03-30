@@ -12,6 +12,7 @@
 #include <AK/Optional.h>
 #include <AK/Time.h>
 #include <LibCore/Proxy.h>
+#include <LibCore/Timer.h>
 #include <LibDNS/Resolver.h>
 #include <LibHTTP/Cache/CacheMode.h>
 #include <LibHTTP/Cache/CacheRequest.h>
@@ -170,6 +171,7 @@ private:
     ErrorOr<void> inform_client_request_started();
     void transfer_headers_to_client_if_needed();
     ErrorOr<void> write_queued_bytes_without_blocking();
+    void clear_cache_wait_timeout();
 
     virtual bool is_revalidation_request() const override;
     ErrorOr<void> revalidation_failed();
@@ -215,10 +217,12 @@ private:
 
     AllocatingMemoryStream m_response_buffer;
     RefPtr<Core::Notifier> m_client_writer_notifier;
+    RefPtr<Core::Timer> m_cache_wait_timeout_timer;
     Optional<RequestPipe> m_client_request_pipe;
     size_t m_bytes_transferred_to_client { 0 };
 
     Optional<Requests::NetworkError> m_network_error;
+    bool m_should_bypass_disk_cache_for_request { false };
 };
 
 }

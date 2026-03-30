@@ -40,7 +40,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
     Vector<ByteString> certificates;
     StringView mach_server_name;
-    StringView http_disk_cache_mode;
+    StringView http_disk_cache_mode = "partitioned"sv;
     StringView resource_map_path;
     bool wait_for_debugger = false;
 

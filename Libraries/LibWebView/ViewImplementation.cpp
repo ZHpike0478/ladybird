@@ -299,6 +299,11 @@ void ViewImplementation::notify_cookies_changed(HashTable<String> const& changed
         client().async_cookies_changed(page_id(), cookies);
 }
 
+void ViewImplementation::notify_storage_changed(Web::StorageAPI::StorageEndpointType storage_endpoint, String const& storage_key)
+{
+    client().async_storage_changed(page_id(), storage_endpoint, storage_key);
+}
+
 ErrorOr<Core::SharedVersionIndex> ViewImplementation::ensure_document_cookie_version_index(Badge<WebContentClient>, String const& domain)
 {
     return m_document_cookie_version_indices.try_ensure(domain, [&]() -> ErrorOr<Core::SharedVersionIndex> {

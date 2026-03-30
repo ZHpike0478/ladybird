@@ -102,7 +102,7 @@ enum class HTTPDiskCacheMode {
 
 struct RequestServerOptions {
     Vector<ByteString> certificates;
-    HTTPDiskCacheMode http_disk_cache_mode { HTTPDiskCacheMode::Disabled };
+    HTTPDiskCacheMode http_disk_cache_mode { HTTPDiskCacheMode::Partitioned };
     Optional<ByteString> resource_substitution_map_path;
 };
 

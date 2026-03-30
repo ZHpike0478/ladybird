@@ -32,6 +32,7 @@
 #include <LibWeb/Page/InputEvent.h>
 #include <LibWeb/Page/SharedBackingStore.h>
 #include <LibWeb/Page/ViewportIsFullscreen.h>
+#include <LibWeb/StorageAPI/StorageEndpoint.h>
 #include <LibWebView/BookmarkStore.h>
 #include <LibWebView/DOMNodeProperties.h>
 #include <LibWebView/Forward.h>
@@ -96,6 +97,7 @@ public:
     void set_preferred_motion(Web::CSS::PreferredMotion);
 
     void notify_cookies_changed(HashTable<String> const& changed_domains, ReadonlySpan<HTTP::Cookie::Cookie>);
+    void notify_storage_changed(Web::StorageAPI::StorageEndpointType, String const& storage_key);
     ErrorOr<Core::SharedVersionIndex> ensure_document_cookie_version_index(Badge<WebContentClient>, String const&);
     Optional<Core::SharedVersion> document_cookie_version(URL::URL const&) const;
 
